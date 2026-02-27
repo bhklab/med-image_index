@@ -1,27 +1,27 @@
-name: Release indexed datasets
+# name: Release indexed datasets
 
-on:
-  push:
-    tags:
-      - "v*.*"
+# on:
+#   push:
+#     tags:
+#       - "v*.*"
 
-permissions:
-  contents: write
+# permissions:
+#   contents: write
 
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+# jobs:
+#   release:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
 
-      - name: Package indexed_datasets
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          tar -czvf "indexed_datasets.tar.gz" indexed_datasets/
+#       - name: Package indexed_datasets
+#         run: |
+#           VERSION="${GITHUB_REF#refs/tags/}"
+#           tar -czvf "indexed_datasets.tar.gz" indexed_datasets/
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: indexed_datasets.tar.gz
-          body: "Indexed datasets release ${{ github.ref_name }}"
-          make_latest: true
+#       - name: Create release
+#         uses: softprops/action-gh-release@v2
+#         with:
+#           files: indexed_datasets.tar.gz
+#           body: "Indexed datasets release ${{ github.ref_name }}"
+#           make_latest: true
