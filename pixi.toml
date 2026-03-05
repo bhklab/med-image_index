@@ -8,3 +8,12 @@ version = "0.1.0"
 [tasks]
 
 [dependencies]
+python = ">=3.11,<3.14"
+jupyterlab = ">=4.5.5,<5"
+
+[pypi-dependencies]
+med-imagetools = { git = "https://github.com/bhklab/med-imagetools.git", branch = "JoshuaSiraj/dicommap" }
+med-imagenet = { git = "https://github.com/bhklab/med-imagenet.git", branch = "mvp-development" }
+nbia-toolkit = { git = "https://github.com/bhklab/nbia-toolkit.git", branch = "JoshuaSiraj/test-imgnet-pipeline" }
+openpyxl = ">=3.1.5, <4"
+

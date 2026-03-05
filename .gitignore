@@ -1,5 +1,8 @@
 # pixi environments
-.pixi/*
+.pixi/
 !.pixi/config.toml
 
 indexed_datasets/
+indexed_datasets.tar.gz
+
+temp_data/
