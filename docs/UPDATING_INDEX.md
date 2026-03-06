@@ -1,119 +1,179 @@
 # Updating the Index
 
-This guide explains how to add a new collection to the index (or update an existing one), package the updated `indexed_datasets` folder, and submit a pull request with the tarball for the release.
+This guide explains how to add a new non-TCIA collection to the index and submit it via pull requests on both GitHub and Hugging Face Hub.
 
-**Reference example:** The notebook [test.ipynb](../test.ipynb) walks through adding a non-TCIA (Zenodo) collection step-by-step; use it as a runnable example while following this doc.
+**Reference example:** The notebook [notebooks/LiverHCCSeg.ipynb](../notebooks/LiverHCCSeg.ipynb) walks through adding a Zenodo collection end-to-end. Follow it as a runnable example alongside this doc.
 
 ## Overview
 
-- **When to update:** Adding a new collection or changing an existing one.
-- **High-level flow:** Get latest index → add/update collection (e.g. via steps in test.ipynb) → tar `indexed_datasets` → open PR with code/source changes and attach the tarball for the release.
-
 ```mermaid
 flowchart LR
-  subgraph prep [Prepare]
-    A[Get latest indexed_datasets]
-    B[Add source.json]
-  end
-  subgraph build [Build index]
-    C[Download collection]
-    D[Metadata and Crawl]
-    E[Optional DICOM mapping]
-  end
-  subgraph ship [Ship]
-    F[tar indexed_datasets]
-    G[PR and attach tarball]
-  end
-  A --> B --> C --> D --> E --> F --> G
+  A[Get latest indexed_datasets] --> B[Create source.json]
+  B --> C[Download data]
+  C --> D[Prepare metadata]
+  D --> E[Run crawler]
+  E --> F[Optional DICOM mapping]
+  F --> G[Validate]
+  G --> H["HF Hub PR (data)"]
 ```
 
 ## Prerequisites
 
-- **Environment:** Use the project's Pixi environment ([pixi.toml](../pixi.toml)) so dependencies (e.g. `med-imagetools`, `med-imagenet`) are available.
-  ```bash
-  pixi install
-  pixi run jupyter lab
-  ```
-- **Latest indexed_datasets:** Either clone the repo and use the existing `indexed_datasets/` directory, or download the tarball from the [latest GitHub release](https://github.com/bhklab/med-image_index/releases) and extract it into the repo root.
+1. **Environment:** Install dependencies with Pixi:
+   ```bash
+   pixi install
+   ```
 
-## Adding a new collection
+2. **HF Hub auth:** Log in to Hugging Face (needs a write-scope token):
+   ```bash
+   hf auth login
+   ```
 
-### Non-TCIA (e.g. Zenodo)
+3. **Latest indexed_datasets:** Download from [HF Hub](https://huggingface.co/datasets/BruhJosh/med-image-index):
+   ```bash
+   hf download BruhJosh/med-image-index --repo-type dataset --local-dir ./hf-data
+   cp -r ./hf-data/indexed_datasets ./indexed_datasets
+   ```
 
-Follow the same steps as in [test.ipynb](../test.ipynb).
+## Step 1: Create source.json
 
-1. **Source config**
-   - Create the collection directory: `indexed_datasets/.imgtools/<CollectionName>/`
-   - Add `source.json` there. The schema must match `imgnet.collections.source` (e.g. `ZenodoSource`: `record_id`, `filenames`, `post_download`, `file_type`, `source`).
-   - Example (Python):
-     ```python
-     from imgnet.collections.source import ZenodoSource
-     import json
-     from pathlib import Path
-     from imgnet.collections.store import IndexedDatasets
+Create the collection directory and add a `source.json` that describes where the data comes from. The schema must match `imgnet.collections.source` (e.g. `ZenodoSource`, `DropboxSource`, `S3Source`).
 
-     indexed_datasets = IndexedDatasets("indexed_datasets")
-     source = ZenodoSource(
-         file_type="nifti",
-         source="zenodo",
-         record_id="<record_id>",
-         filenames=["<archive>.zip", "<metadata>.xlsx"],
-         post_download=["unzip"]
-     )
-     dataset_index_path = indexed_datasets.imgtools_path / "<CollectionName>"
-     dataset_index_path.mkdir(parents=True, exist_ok=True)
-     with open(dataset_index_path / "source.json", "w") as f:
-         json.dump(source.model_dump(mode="json"), f, indent=2)
-     ```
+```python
+import json
+from imgnet.collections.store import IndexedDatasets
+from imgnet.collections.source import ZenodoSource
 
-2. **Download**
-   - Use `download_collection(collection_name, temp_data_path, indexed_datasets)` to fetch data into e.g. `temp_data/<CollectionName>/`.
+indexed_datasets = IndexedDatasets("indexed_datasets")
 
-3. **Metadata**
-   - If the source provides metadata (e.g. Excel), convert to CSV and normalize column names (e.g. flatten headers, strip `\r\n`); save under `temp_data/<CollectionName>/` so the crawler can join on it.
+source = ZenodoSource(
+    file_type="nifti",
+    source="zenodo",
+    record_id="<record_id>",
+    filenames=["<archive>.zip", "<metadata>.xlsx"],
+    post_download=["unzip"],
+)
 
-4. **Crawl**
-   - Use `imgtools.nifti.crawl.Crawler` with:
-     - `nifti_dir` = path to NIfTI files (e.g. `temp_data/<CollectionName>/nifti_and_segms`)
-     - `scan_name_pattern` and `mask_name_pattern` as appropriate for your layout
-     - `metadata_path` and `metadata_join_col` for joining metadata
-     - `output_dir=indexed_datasets.imgtools_path`, `dataset_name="<CollectionName>"`
-   - Run `crawler.crawl()` to generate `index.csv` (and related files) under `indexed_datasets/.imgtools/<CollectionName>/`.
-
-5. **Optional: DICOM-style column mapping**
-   - Add or rename columns (e.g. Modality) if needed.
-   - Edit `index_mapping.toml` in the collection folder to map index columns to DICOM-like names, then apply the mapping and overwrite `index.csv` (see the last cells of test.ipynb).
-
-### TCIA (DICOM / NBIA)
-
-For TCIA collections, use [index_tcia.py](../index_tcia.py). The script indexes collections from the NBIA API into `indexed_datasets` (creates collection dirs and runs the DICOM crawler). Run from the repo root with the Pixi environment; it skips collections that already have an index.
-
-## Packaging the updated index
-
-From the repo root:
-
-```bash
-tar -czvf indexed_datasets.tar.gz indexed_datasets/
+dataset_path = indexed_datasets.imgtools_path / "<CollectionName>"
+dataset_path.mkdir(parents=True, exist_ok=True)
+with open(dataset_path / "source.json", "w") as f:
+    json.dump(source.model_dump(mode="json"), f, indent=2)
 ```
 
-## Pull request and release asset
+## Step 2: Download the data
 
-- **PR contents**
-  - Include code and config changes (e.g. new or updated `source.json`, script or doc updates).
-  - Do **not** commit the full `indexed_datasets/` tree if it is large; the release asset is the tarball.
+Use `download_collection` to fetch the data into a temporary directory:
 
-- **Release asset (current process)**
-  - The [release workflow](../.github/workflows/release_indexed_datasets.yml) is currently **commented out**, so the tarball is not built automatically on tag push.
-  - **Attach** the built `indexed_datasets.tar.gz` to your PR (e.g. in a comment or as a draft release asset), so a maintainer can upload it to the corresponding GitHub release when cutting the release.
-  - If the workflow is later enabled: after your PR is merged, a maintainer would create and push a version tag; the workflow would then package `indexed_datasets/` and upload the tarball to the release.
+```python
+from pathlib import Path
+from imgnet.download import download_collection
+
+temp_data_path = Path("temp_data") / "<CollectionName>"
+temp_data_path.mkdir(parents=True, exist_ok=True)
+download_collection("<CollectionName>", temp_data_path, indexed_datasets)
+```
+
+## Step 3: Prepare metadata
+
+If the source provides metadata (e.g. an Excel file), convert it to CSV and normalize column names:
+
+```python
+import re
+import pandas as pd
+
+xlsx_path = temp_data_path / "<MetadataFile>.xlsx"
+csv_path = temp_data_path / "<MetadataFile>.csv"
+
+df = pd.read_excel(xlsx_path)
+df = df.dropna(how="all")
+df.columns = [re.sub(r"[\r\n\x0d_]+", " ", str(c)).strip() for c in df.columns]
+df.to_csv(csv_path, index=False)
+```
+
+Skip this step if the source has no separate metadata file.
+
+## Step 4: Run the crawler
+
+Use the `imgtools` NIfTI crawler to generate `index.csv` and related files:
+
+```python
+from imgtools.nifti.crawl import Crawler
+
+crawler = Crawler(
+    nifti_dir=str(temp_data_path / "<data_subfolder>"),
+    scan_name_pattern="{PatientID}/{StudyDate}/{PhaseContrast}.nii.gz",
+    mask_name_pattern="{PatientID}/{StudyDate}/rater{rater_id}_{ROIName}.nii.gz",
+    metadata_path=str(csv_path),            # omit if no metadata
+    metadata_join_col="PatientID",           # omit if no metadata
+    deep=True,
+    output_dir=str(indexed_datasets.imgtools_path),
+    dataset_name="<CollectionName>",
+    n_jobs=10,
+    force=True,
+)
+crawler.crawl()
+```
+
+Adjust `scan_name_pattern`, `mask_name_pattern`, and other parameters to match your dataset's file layout. See the [LiverHCCSeg notebook](../notebooks/LiverHCCSeg.ipynb) for a concrete example.
+
+## Step 5: Optional DICOM column mapping
+
+If the crawler generated an `index_mapping.toml`, you can use it to rename columns in `index.csv` to DICOM-style names:
+
+```python
+import toml
+
+mapping_path = indexed_datasets.imgtools_path / "<CollectionName>" / "index_mapping.toml"
+index_path = indexed_datasets.imgtools_path / "<CollectionName>" / "index.csv"
+
+with open(mapping_path) as f:
+    mapping = toml.load(f)
+
+non_empty = {k: v for k, v in mapping.items() if v}
+if non_empty:
+    df = pd.read_csv(index_path)
+    df.rename(columns=non_empty, inplace=True)
+    df.to_csv(index_path, index=False)
+```
+
+You can also add a `Modality` column or other custom columns at this point.
+
+## Step 6: Validate
+
+Check that the new collection is compatible with imgnet:
+
+```bash
+pixi run validate <CollectionName>
+```
+
+This verifies:
+- `source.json` parses correctly.
+- `index.csv` loads as a non-empty DataFrame.
+- Required columns (`filepath`, `PatientID`) exist.
+
+Fix any errors before proceeding.
+
+## Step 7: Submit pull requests
+
+Once validation passes, open two PRs: one on HF Hub for the data, and one on GitHub for any code/config changes.
+
+### 7a. Open HF Hub PR
+
+Upload the updated `indexed_datasets/` to [BruhJosh/med-image-index](https://huggingface.co/datasets/BruhJosh/med-image-index) as a pull request:
+
+```bash
+huggingface-cli upload BruhJosh/med-image-index ./indexed_datasets indexed_datasets \
+  --repo-type dataset \
+  --commit-message "Add <CollectionName>" \
+  --create-pr
+```
 
 ## Checklist
 
-- [ ] Get latest `indexed_datasets` (clone or download from release)
-- [ ] Add `source.json` under `indexed_datasets/.imgtools/<CollectionName>/`
-- [ ] Download collection (e.g. `download_collection`) to `temp_data/<CollectionName>/`
-- [ ] Prepare metadata (convert to CSV, normalize columns) if needed
-- [ ] Run NIFTI Crawler with correct patterns and output to `indexed_datasets.imgtools_path`
-- [ ] Optional: apply DICOM column mapping via `index_mapping.toml` and save `index.csv`
-- [ ] Run `tar -czvf indexed_datasets.tar.gz indexed_datasets/`
-- [ ] Open PR with config/code changes and attach the tarball for the release
+- [ ] Get latest `indexed_datasets` from HF Hub
+- [ ] Create `source.json` under `indexed_datasets/.imgtools/<CollectionName>/`
+- [ ] Download the data to `temp_data/<CollectionName>/`
+- [ ] Convert metadata to CSV if needed
+- [ ] Run the crawler to generate `index.csv`
+- [ ] Optional: apply DICOM column mapping via `index_mapping.toml`
+- [ ] Run `pixi run validate <CollectionName>` and confirm it passes

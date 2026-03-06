@@ -1,30 +1,31 @@
 # med-image_index
 
-Index metadata for BHKLAB medical imaging collections (NBIA-style). The `indexed_datasets` folder contains per-collection index files (e.g. `index.csv`, `crawl_db.json`) and `collections_summary.json`.
+Index metadata for BHKLAB medical imaging collections. The `indexed_datasets` folder contains per-collection index files (e.g. `index.csv`, `crawl_db.json`, `source.json`) and `collections_summary.json`.
 
-## Releases
+Data is stored on [Hugging Face Hub](https://huggingface.co/datasets/BruhJosh/med-image-index). This repo contains the code, notebooks, and documentation for managing the index.
 
-Releases are built automatically when you push a version tag. The `indexed_datasets` folder is packaged as a tarball and attached to the GitHub release.
-
-1. Create and push a tag (e.g. `v0.1.0`):
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-2. The [Release indexed datasets](.github/workflows/release_indexed_datasets.yml) workflow runs, creates the release, and uploads `indexed_datasets-<tag>.tar.gz`.
-
-**Note:** The release workflow is currently commented out. Until it is enabled, the indexed-datasets tarball is provided via PR (see [Updating the index](#updating-the-index)) and uploaded manually to the release.
-
-## Adding a remote
-
-After creating the repository on GitHub:
+## Quick start
 
 ```bash
-git remote add origin https://github.com/<org>/med-image_index.git
+pixi install
 ```
 
-## Updating the index
+## Adding a new collection
 
-The full procedure for adding a new collection and shipping an updated index is in **[docs/UPDATING_INDEX.md](docs/UPDATING_INDEX.md)**.
+Follow the step-by-step guide in **[docs/UPDATING_INDEX.md](docs/UPDATING_INDEX.md)**. The [LiverHCCSeg notebook](notebooks/LiverHCCSeg.ipynb) is a runnable reference example.
 
-In short: get the latest `indexed_datasets` (clone or from release), add the collection (see [test.ipynb](test.ipynb) for non-TCIA/Zenodo or [index_tcia.py](index_tcia.py) for TCIA), tar the `indexed_datasets` folder, then open a PR with your config/code changes and attach the tarball so it can be used as the release asset.
+In short:
+
+1. Download the latest `indexed_datasets` from HF Hub.
+2. Create a `source.json` describing where the data lives.
+3. Download and prepare the data locally.
+4. Run the `imgtools` crawler to generate `index.csv`.
+5. Validate with `pixi run validate <CollectionName>`.
+6. Open an HF Hub PR with the updated data and a GitHub PR referencing it.
+
+## Validate the index
+
+```bash
+pixi run validate                  # all collections
+pixi run validate MyCollection     # single collection
+```

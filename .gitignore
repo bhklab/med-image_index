@@ -2,7 +2,9 @@
 .pixi/
 !.pixi/config.toml
 
+# data lives on HF Hub, not in this repo
 indexed_datasets/
 indexed_datasets.tar.gz
-
 temp_data/
+
+.env

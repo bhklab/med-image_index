@@ -6,6 +6,7 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
+validate = { cmd = "python cli.py validate", description = "Validate the index" }
 
 [dependencies]
 python = ">=3.11,<3.14"
@@ -16,4 +17,6 @@ med-imagetools = { git = "https://github.com/bhklab/med-imagetools.git", branch 
 med-imagenet = { git = "https://github.com/bhklab/med-imagenet.git", branch = "mvp-development" }
 nbia-toolkit = { git = "https://github.com/bhklab/nbia-toolkit.git", branch = "JoshuaSiraj/test-imgnet-pipeline" }
 openpyxl = ">=3.1.5, <4"
+click = ">=8.1, <9"
+huggingface-hub = ">=0.20, <1"
 
