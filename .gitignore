@@ -1,3 +1,6 @@
+# Local setuptools/hatch output when developing the package
+*.egg-info/
+
 # pixi environments
 .pixi/
 !.pixi/config.toml
@@ -8,3 +11,6 @@ indexed_datasets.tar.gz
 temp_data/
 
 .env
+
+parquet_index
+new_index
