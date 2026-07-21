@@ -23,6 +23,7 @@ venv/
 
 # project data (lives on HF Hub)
 indexed_datasets/
+indexed_datasets2/
 indexed_datasets.tar.gz
 temp_data/
 parquet_index/
