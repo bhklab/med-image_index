@@ -5,18 +5,15 @@ name = "med-image_index"
 platforms = ["linux-64"]
 version = "0.1.0"
 
-[tasks]
-new-index-to-parquet = "python workflow/scripts/new_index_csv_to_parquet.py"
-
 [dependencies]
 python = ">=3.11,<3.14"
 jupyterlab = ">=4.5.5,<5"
 numpy = "<2"
 
 [pypi-dependencies]
-med-image-index = { path = "src/imgindex", editable = true }
+med-image-index = { path = ".", editable = true }
 nbia-toolkit = { git = "https://github.com/bhklab/nbia-toolkit.git", branch = "JoshuaSiraj/test-imgnet-pipeline" }
 openpyxl = ">=3.1.5, <4"
-huggingface-hub = ">=0.20, <1"
+huggingface-hub = ">=1, <2"
 pyarrow = ">=15, <22"
 

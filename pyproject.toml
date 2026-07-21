@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "med-image-index"
 version = "0.1.0"
 description = "Add your description here"
-readme = "../../README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "med-imagenet",
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["imgindex"]
+packages = ["src/imgindex"]
 
 [tool.uv.sources]
 med-imagetools = { git = "https://github.com/bhklab/med-imagetools.git", rev = "JoshuaSiraj/nifti-index" }

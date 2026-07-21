@@ -48,4 +48,3 @@ def validate_index(
 if __name__ == "__main__":
     df = pd.read_csv("notebooks/indexed_datasets/.imgtools/Totalsegmentator/index.csv")
     validate_index(df, "nifti", lazy=True)
-
