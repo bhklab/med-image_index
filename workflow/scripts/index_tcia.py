@@ -5,6 +5,7 @@ import concurrent.futures
 from functools import partial
 import os
 import sys
+from dotenv import load_dotenv
 
 from tqdm import tqdm
 import pandas as pd
@@ -16,6 +17,7 @@ from nbiatoolkit.dicomtags.tags import generateFileDatasetFromTags
 import datetime
 
 from imgnet.loggers import logger
+import logging
 from imgnet.collections.store import IndexedDatasets
 
 
@@ -132,7 +134,7 @@ def index_collection(client: NBIAClient, collection: str, output_path: Path, exi
 
 
 def update_index(output_path: Path, date: datetime.date = None, max_workers: int = 1, is_dry: bool = False):
-    db = IndexedDatasets(path="/Users/declankorda/med-image-index/indexed_datasets", force_download=False)
+    db = IndexedDatasets(force_download=True)
     current_collections = db.collections
     collection_series = {}
     existing_summary = []
@@ -202,30 +204,12 @@ def update_index(output_path: Path, date: datetime.date = None, max_workers: int
     existing_df['SeriesCount'] = 1
     new_df['SeriesCount'] = 1
 
-    existing_uids= [{"SeriesInstanceUID": uid} for uid in existing_df['SeriesInstanceUID'].to_list()]
-    new_uids = [{"SeriesInstanceUID": uid} for uid in new_df['SeriesInstanceUID'].to_list()]
-    existing_file_size = []
-    new_file_size = []
-    for uid in existing_uids:
-        try:
-            existing_file_size.append(client.getSeriesSize(params=uid))
-        except Exception as e:
-            logger.warning(f"Failed to process {uid["SeriesInstanceUID"]}: {e}")
-    for uid in new_uids:
-        try:
-            new_file_size.append(client.getSeriesSize(params=uid))
-        except Exception as e:
-            logger.warning(f"Failed to process {uid["SeriesInstanceUID"]}: {e}")
+    existing_file_size = pd.DataFrame(client.getSeriesSize(params=[{"SeriesInstanceUID": uid} for uid in existing_df['SeriesInstanceUID'].to_list()]))['TotalSizeInBytes']
+    new_file_size = pd.DataFrame(client.getSeriesSize(params=[{"SeriesInstanceUID": uid} for uid in new_df['SeriesInstanceUID'].to_list()]))['TotalSizeInBytes']
 
-    print("\n##########\n")
-    print(existing_file_size)
-    print("\n##########\n")
+    existing_df['FileSize'] =  existing_file_size
+    new_df['FileSize'] = new_file_size
 
-
-
-    print("\n##########\n")
-    print(existing_df.columns)
-    print("\n##########\n")
     existing_df = existing_df[['Collection', 'SeriesCount', 'FileSize']].groupby(by='Collection', as_index=False).sum()
     new_df = new_df[['Collection', 'SeriesCount', 'FileSize']].groupby(by='Collection', as_index=False).sum()
 
@@ -255,7 +239,7 @@ def update_index(output_path: Path, date: datetime.date = None, max_workers: int
 #         index_collection(client, collection, output_path, exist_strategy="overwrite", max_workers=int(client.max_concurrent_requests) - 3)
 
 if __name__ == "__main__":
-
+    logger.setLevel(logging.DEBUG)
     # TODO: Fix logging, add summary table as a csv (one for new colelctions one for existing), add private access.
     is_dry = False
     usage = "Usage: index_tcia.py <dd/mm/yyy> [OPTIONS]\nOptions:\n   --dry: executes a dry run which does not download any new data, but produces the summary tables for new and existing collection changes."
@@ -277,8 +261,14 @@ if __name__ == "__main__":
         else:
             t1 = sys.argv[1] 
     f1 = "%d/%m/%Y"
-    client = NBIAClient()
+
+    load_dotenv()
+
+    NBIA_USERNAME = os.getenv('NBIA_USERNAME')
+    NBIA_PASSWORD = os.getenv('NBIA_PASSWORD')
+    client = NBIAClient(username=NBIA_USERNAME, password=NBIA_PASSWORD, timeout_seconds=1000, max_concurrent_requests=32)
     print("Client connection established.")
+    
     
     collections = client.getCollections()
     print("Retrieved collections list.")
@@ -287,3 +277,6 @@ if __name__ == "__main__":
 
     
     update_index(output_path=output_path, date=datetime.datetime.strptime(t1, f1).date().strftime("%d/%m/%Y"), max_workers=1, is_dry=is_dry)
+
+    # FIX LOGGING STUFF
+    # MAKE .ENV
