@@ -1,16 +1,29 @@
-# Local setuptools/hatch output when developing the package
+# Python
+__pycache__
+*.py[cod]
 *.egg-info/
+dist/
+build/
+.venv/
+venv/
 
-# pixi environments
+# pixi
 .pixi/
 !.pixi/config.toml
 
-# data lives on HF Hub, not in this repo
+# notebooks
+.ipynb_checkpoints/
+
+# env / secrets
+.env
+
+# OS / editor
+.DS_Store
+*.swp
+
+# project data (lives on HF Hub)
 indexed_datasets/
 indexed_datasets.tar.gz
 temp_data/
-
-.env
-
-parquet_index
-new_index
+parquet_index/
+new_index/
