@@ -20,6 +20,10 @@ from imgnet.loggers import logger
 import logging
 from imgnet.collections.store import IndexedDatasets
 
+import requests
+
+import json
+
 
 def process_single_series(client: NBIAClient, s: dict, output_path: Path, collection: str, exist_strategy: Literal["skip", "overwrite"] = "skip") -> bool:
     """
@@ -63,9 +67,9 @@ def update_index(
     is_dry: bool = False,
 ):
     db = IndexedDatasets(force_download=True)
+    #db = IndexedDatasets()
     current_collections = db.collections
     tcia_collections = client.getCollections()
-
     collection_series = {}
     existing_summary = []
     new_summary = []
@@ -129,6 +133,8 @@ def update_index(
             crawler.crawl()
             logger.info(f"Finished indexing collection {collection}, output path: {output_path / collection}")
 
+    # Produce Summaries
+
     existing_df = pd.DataFrame(existing_summary)
     new_df = pd.DataFrame(new_summary)
 
@@ -150,6 +156,38 @@ def update_index(
 
     existing_df.to_csv(output_path / "updated_collections_table.csv")
     new_df.to_csv(output_path / "new_collections_table.csv")
+
+    # Determine which collections are private and mark them accordingly
+
+    # Get all collections from IDC
+    response = requests.get("https://api.imaging.datacommons.cancer.gov/v2/collections")
+    idc_response = response.json()
+
+    # Extract collections list
+    idc_collections = [item['collection_id'].replace("_", "-").upper() for item in idc_response['collections']]
+    print(len(idc_collections))
+    data = {
+                        "file_type": "dicom",
+                        "source": "private_tcia",
+                        "post_download": [
+                            "unzip"
+                        ]
+                    }
+
+    print(idc_collections)
+    for _collection in tcia_collections:
+        if _collection["Collection"].upper().replace(" ", "-") not in idc_collections:
+            print(f"writing file to {output_path / _collection['Collection'] / 'source.json'}")
+            with open(output_path / _collection['Collection'] / 'source.json', 'w') as json_file:
+                json.dump(data, json_file, indent=4)
+    
+
+    
+
+
+
+
+
 
 
 # if __name__ == "__main__":
@@ -206,7 +244,7 @@ if __name__ == "__main__":
     output_path.mkdir(parents=True, exist_ok=True)
 
     
-    update_index(output_path=output_path, date=datetime.datetime.strptime(t1, f1).date().strftime("%d/%m/%Y"), max_workers=1, is_dry=is_dry)
+    update_index(client=client, output_path=output_path, date=datetime.datetime.strptime(t1, f1).date().strftime("%d/%m/%Y"), is_dry=is_dry)
 
     # FIX LOGGING STUFF
     # MAKE .ENV
