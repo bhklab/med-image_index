@@ -1,250 +1,358 @@
 import asyncio
-from typing import Literal
-from pathlib import Path
-import concurrent.futures
+import logging
+from dataclasses import dataclass, field
 from functools import partial
-import os
-import sys
-from dotenv import load_dotenv
+from pathlib import Path
+import json
+from typing import Literal
 
-from tqdm import tqdm
 import pandas as pd
 from pydicom import dcmread
+from tabulate import tabulate
+from tqdm import tqdm
+
+from imgnet.collections.store import IndexedDatasets
 from imgtools.dicom.crawl import Crawler
 from nbiatoolkit import NBIA_ENDPOINT
-from nbiatoolkit.nbia import NBIAClient
 from nbiatoolkit.dicomtags.tags import generateFileDatasetFromTags
-import datetime
+from nbiatoolkit.nbia import NBIAClient
 
-from imgnet.loggers import logger
-import logging
-from imgnet.collections.store import IndexedDatasets
+from imgindex.model import DicomIndex, validate_index
+from imgindex.tcia.utils import convert_to_db
+from imgindex.parquet import csv_to_parquet
 
-import requests
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-import json
+
+@dataclass
+class TCIAUpdate:
+    """Series update plan from summarize_updates, used by apply_updates."""
+
+    by_collection: dict[str, list[dict]] = field(default_factory=dict)
+    existing_series: list[dict] = field(default_factory=list)
+    new_series: list[dict] = field(default_factory=list)
+    existing_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
+    new_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
-def process_single_series(client: NBIAClient, s: dict, output_path: Path, collection: str, exist_strategy: Literal["skip", "overwrite"] = "skip") -> bool:
-    """
-    Process a single series. Returns True if successful, False otherwise.
-    """
-    if exist_strategy == "skip" and (output_path / collection / "images" / f"{s['SeriesInstanceUID']}.dcm").exists():
+def process_single_series(
+    client: NBIAClient,
+    series: dict,
+    output_path: Path,
+    collection: str,
+    exist_strategy: Literal["skip", "overwrite"] = "skip",
+) -> bool:
+    """Download or reconstruct one series header DICOM. Returns True on success."""
+    out_file = output_path / collection / "images" / f"{series['SeriesInstanceUID']}.dcm"
+    if exist_strategy == "skip" and out_file.exists():
         return True
-    
-    try:
-        if s["Modality"] not in ["CT", "PT", "MR"]:
-            sop_uid_data = client.getSOPIDs(s)
 
-            for key in sop_uid_data:
-                sop_uid = sop_uid_data[key][0]["SOPInstanceUID"]
-            series_uid = s["SeriesInstanceUID"]
-            
+    try:
+        if series["Modality"] not in ["CT", "PT", "MR"]:
+            sop_uid_data = client.getSOPIDs(series)
+            sop_uid = next(
+                (entries[0]["SOPInstanceUID"] for entries in sop_uid_data.values() if entries),
+                None,
+            )
+            if sop_uid is None:
+                logger.warning("No SOP instances for series %s", series["SeriesInstanceUID"])
+                return False
+
             file = asyncio.run(
-                client.query_bytes(NBIA_ENDPOINT.DOWNLOAD_IMAGE, {"SeriesInstanceUID": series_uid, "SOPInstanceUID": sop_uid})
+                client.query_bytes(
+                    NBIA_ENDPOINT.DOWNLOAD_IMAGE,
+                    {
+                        "SeriesInstanceUID": series["SeriesInstanceUID"],
+                        "SOPInstanceUID": sop_uid,
+                    },
+                )
             )
             ds = dcmread(file, stop_before_pixels=True, force=True)
-        else: 
+        else:
             tags = asyncio.run(
-                client.query_json(NBIA_ENDPOINT.GET_DICOM_TAGS, {"SeriesUID": s["SeriesInstanceUID"]})
+                client.query_json(
+                    NBIA_ENDPOINT.GET_DICOM_TAGS,
+                    {"SeriesUID": series["SeriesInstanceUID"]},
+                )
             )
-            tags_df = pd.DataFrame(tags)
-            ds = generateFileDatasetFromTags(tags_df)
+            ds = generateFileDatasetFromTags(pd.DataFrame(tags))
 
-        ds.save_as(output_path / collection / "images" / f"{s['SeriesInstanceUID']}.dcm", enforce_file_format=False)
+        ds.save_as(out_file, enforce_file_format=False)
         return True
-        
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.warning(f"Failed to process series {s['SeriesInstanceUID']}: {e}")
+    except Exception as e:
+        logger.warning("Failed to process series %s: %s", series["SeriesInstanceUID"], e)
         return False
 
 
+class IndexTCIA:
+    """Fetch TCIA series updates, summarize them, then optionally download and crawl."""
 
-def update_index(
-    output_path: Path, 
-    client: NBIAClient, 
-    date: datetime.date = None, 
-    is_dry: bool = False,
-):
-    db = IndexedDatasets(force_download=True)
-    #db = IndexedDatasets()
-    current_collections = db.collections
-    tcia_collections = client.getCollections()
-    collection_series = {}
-    existing_summary = []
-    new_summary = []
+    TEMP_DIR_NAME = "temp"
+    INDEX_DIR_NAME = "index"
 
-    if is_dry:
-        print("Starting dry run, no new data will be downloaded.")
-    print("getting new series'")
-    for _collection in tcia_collections:
-        (output_path / _collection["Collection"] / "images").mkdir(parents=True, exist_ok=True)
-        collection_series[_collection["Collection"]] = []
-    series_list = client.getNewSeries(params={"fromDate": f"{date}"})
+    def __init__(
+        self,
+        output_path: Path | str,
+        *,
+        username: str | None = None,
+        password: str | None = None,
+    ) -> None:
+        self.output_path = Path(output_path)
+        if username is None or password is None:
+            username = "nbia_guest"
+            password = ""
+        self.client = NBIAClient(username=username, password=password)
+        self.store = IndexedDatasets(force_download=False)
 
-    def process_collection(series_list: list, collection: str):
-        # Sequential processing - use the original client
-        process_func = partial(process_single_series, client, output_path=output_path, exist_strategy="skip")
-        
+    @property
+    def temp_path(self) -> Path:
+        """Working directory for downloaded DICOMs and imgtools crawl outputs."""
+        return self.output_path / self.TEMP_DIR_NAME
+
+    @property
+    def index_path(self) -> Path:
+        """Directory for validated index CSVs and parquet datasets."""
+        return self.output_path / self.INDEX_DIR_NAME
+
+    @property
+    def existing_collections(self) -> list[str]:
+        """Collections already present in the local index store."""
+        return self.store.collections
+
+    @property
+    def tcia_collections(self) -> list[str]:
+        """All public collection names from TCIA/NBIA."""
+        return [c["Collection"] for c in self.client.getCollections()]
+
+    # ------------------------------------------------------------------
+    # Step 1: summarize (no downloads / crawl)
+    # ------------------------------------------------------------------
+
+    def get_new_series_since(self, since: str) -> list[dict]:
+        """Return series updated since `since` (`dd/mm/yyyy`)."""
+        return self.client.getNewSeries(params={"fromDate": since})
+
+    def _group_by_collection(self, series_list: list[dict]) -> dict[str, list[dict]]:
+        """Group series rows by Collection name."""
+        grouped: dict[str, list[dict]] = {}
+        for series in series_list:
+            collection = series["Collection"]
+            grouped.setdefault(collection, []).append(series)
+        return grouped
+
+    def _split_existing_vs_new(
+        self,
+        by_collection: dict[str, list[dict]],
+    ) -> tuple[list[dict], list[dict]]:
+        """Split series into updates for known vs unknown collections."""
+        existing: list[dict] = []
+        new: list[dict] = []
+        for collection, series in by_collection.items():
+            if collection in self.existing_collections:
+                existing.extend(series)
+            else:
+                new.extend(series)
+        return existing, new
+
+    def _get_series_sizes(self, series_uids: list[str], batch_size: int = 100) -> dict[str, int]:
+        """Map SeriesInstanceUID -> TotalSizeInBytes, skipping failed lookups."""
+        size_map: dict[str, int] = {uid: 0 for uid in series_uids}
+        if not series_uids:
+            return size_map
+
+        def fetch_sizes(uids: list[str]) -> None:
+            if not uids:
+                return
+            try:
+                rows = self.client.getSeriesSize(
+                    params=[{"SeriesInstanceUID": uid} for uid in uids]
+                )
+                # Responses are positional and omit SeriesInstanceUID.
+                for uid, row in zip(uids, rows):
+                    size_map[uid] = row.get("TotalSizeInBytes", 0)
+            except Exception:
+                if len(uids) == 1:
+                    logger.warning("Could not get size for series %s", uids[0])
+                    return
+                mid = len(uids) // 2
+                fetch_sizes(uids[:mid])
+                fetch_sizes(uids[mid:])
+
+        for start in range(0, len(series_uids), batch_size):
+            batch = series_uids[start : start + batch_size]
+            fetch_sizes(batch)
+            logger.info(
+                "Fetched sizes for %s/%s series",
+                min(start + batch_size, len(series_uids)),
+                len(series_uids),
+            )
+        return size_map
+
+    def _build_collection_summary(self, series: list[dict]) -> pd.DataFrame:
+        """Aggregate series into per-collection count and size columns."""
+        columns = ["Collection", "SeriesCount", "FileSize", "Size (GB)"]
+        if not series:
+            return pd.DataFrame(columns=columns)
+
+        df = pd.DataFrame(series)
+        size_map = self._get_series_sizes(df["SeriesInstanceUID"].tolist())
+        df["SeriesCount"] = 1
+        df["FileSize"] = df["SeriesInstanceUID"].map(size_map).fillna(0)
+        summary = (
+            df[["Collection", "SeriesCount", "FileSize"]]
+            .groupby("Collection", as_index=False)
+            .sum()
+        )
+        summary["Size (GB)"] = (summary["FileSize"] / (1024**3)).round(2)
+        return summary
+
+    def summarize_updates(self, since: str) -> TCIAUpdate:
+        """Discover changes since `since`, write summary CSVs, and return a plan."""
+        self.output_path.mkdir(parents=True, exist_ok=True)
+
+        series_list = self.get_new_series_since(since)
+        logger.info("Found %s new series since %s", len(series_list), since)
+
+        by_collection = self._group_by_collection(series_list)
+        existing_series, new_series = self._split_existing_vs_new(by_collection)
+        logger.info(
+            "Found %s existing series and %s new series",
+            len(existing_series),
+            len(new_series),
+        )
+
+        existing_df = self._build_collection_summary(existing_series)
+        new_df = self._build_collection_summary(new_series)
+        existing_df.to_csv(self.output_path / "updated_collections_table.csv", index=False)
+        new_df.to_csv(self.output_path / "new_collections_table.csv", index=False)
+
+        print("Updated Collections Table:")
+        if not existing_df.empty:
+            print(tabulate(existing_df, headers="keys", tablefmt="github", showindex=False))
+        else:
+            print("(No updated collections)")
+
+        print("\nNew Collections Table:")
+        if not new_df.empty:
+            print(tabulate(new_df, headers="keys", tablefmt="github", showindex=False))
+        else:
+            print("(No new collections)")
+
+        return TCIAUpdate(
+            by_collection=by_collection,
+            existing_series=existing_series,
+            new_series=new_series,
+            existing_summary=existing_df,
+            new_summary=new_df,
+        )
+
+    # ------------------------------------------------------------------
+    # Step 2: apply
+    # ------------------------------------------------------------------
+
+    def apply_updates(self, update: TCIAUpdate) -> None:
+        """Download series from `update` and crawl non-empty collection dirs."""
+        collections = [
+            collection
+            for collection, series in update.by_collection.items()
+            if series
+        ]
+        self._ensure_collection_dirs(collections)
+        for collection in collections:
+            self.process_series(update.by_collection[collection], collection)
+        self.crawl_collections(collections)
+
+    def process_series(self, series_list: list[dict], collection: str) -> None:
+        """Process all series in one collection, with a progress bar."""
+        process_func = partial(
+            process_single_series,
+            self.client,
+            output_path=self.temp_path,
+            exist_strategy="skip",
+        )
+
         with tqdm(
-            series_list, 
+            series_list,
             desc=f"Processing {collection}",
             unit="series",
             total=len(series_list),
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         ) as pbar:
             successful = 0
             failed = 0
-            for s in pbar:
+            for series in pbar:
                 try:
-                    result = process_func(s, collection=s["Collection"])
-                    if result:
+                    if process_func(series, collection=series["Collection"]):
                         successful += 1
                     else:
                         failed += 1
                 except Exception as e:
-                    logger.error(f"Error processing series {s.get('SeriesInstanceUID')}: {e}")
+                    logger.error(
+                        "Error processing series %s: %s",
+                        series.get("SeriesInstanceUID"),
+                        e,
+                    )
                     failed += 1
                 pbar.set_postfix({"Success": successful, "Failed": failed})
 
-
-    
-    for s in series_list:
-        collection_series[s["Collection"]].append(s)
-    for collection, series in collection_series.items():
-        if collection in current_collections:
-            logger.info(f"Processing series for collection which exists in current collections: {collection}")
-            existing_summary += series
-        else:
-            logger.info(f"Processing series for collection does not exist in current collections: {collection}")
-            new_summary += series
-        if not is_dry:
-                process_collection(series, collection)
-    
-    
-    # Crawling section 
-    if not is_dry:
-        for _collection in tcia_collections:
-            collection = _collection["Collection"]
-            if len(os.listdir(output_path / collection / "images")) == 0:
+    def crawl_collections(self, collections: list[str]) -> None:
+        """Run imgtools Crawler on collections that have downloaded images."""
+        for collection in collections:
+            images_dir = self.temp_path / collection / "images"
+            if not images_dir.exists() or not any(images_dir.iterdir()):
                 continue
-            logger.info(f"Crawling collection {collection}")
-            crawler = Crawler(output_path / collection / "images", force=True)
+            logger.info("Crawling collection %s", collection)
+            crawler = Crawler(
+                images_dir,
+                output_dir=self.temp_path,
+                dataset_name=collection,
+                force=True,
+            )
             crawler.crawl()
-            logger.info(f"Finished indexing collection {collection}, output path: {output_path / collection}")
+            logger.info(
+                "Finished indexing collection %s, crawl path: %s",
+                collection,
+                self.temp_path / collection,
+            )
 
-    # Produce Summaries
+    def _ensure_collection_dirs(self, collections: list[str]) -> None:
+        """Create `images/` under each collection temp path."""
+        for collection in collections:
+            (self.temp_path / collection / "images").mkdir(parents=True, exist_ok=True)
 
-    existing_df = pd.DataFrame(existing_summary)
-    new_df = pd.DataFrame(new_summary)
+    # ------------------------------------------------------------------
+    # Orchestration
+    # ------------------------------------------------------------------
 
-    existing_df['SeriesCount'] = 1
-    new_df['SeriesCount'] = 1
+    def run(self, since: str, *, apply: bool = True) -> TCIAUpdate:
+        """Summarize updates, then optionally download and crawl."""
+        update = self.summarize_updates(since)
 
-    existing_file_size = pd.DataFrame(client.getSeriesSize(params=[{"SeriesInstanceUID": uid} for uid in existing_df['SeriesInstanceUID'].to_list()]))['TotalSizeInBytes']
-    new_file_size = pd.DataFrame(client.getSeriesSize(params=[{"SeriesInstanceUID": uid} for uid in new_df['SeriesInstanceUID'].to_list()]))['TotalSizeInBytes']
+        if apply:
+            self.apply_updates(update)
 
-    existing_df['FileSize'] =  existing_file_size
-    new_df['FileSize'] = new_file_size
+        for collection in update.by_collection:
+            crawl_dir = self.temp_path / collection
+            index_df = pd.read_csv(crawl_dir / "index.csv")
+            try:
+                validate_index(index_df, "dicom", lazy=True)
+            except Exception as e:
+                logger.error(f"Invalid index for collection {collection}: {e}")
+                continue
 
-    existing_df = existing_df[['Collection', 'SeriesCount', 'FileSize']].groupby(by='Collection', as_index=False).sum()
-    new_df = new_df[['Collection', 'SeriesCount', 'FileSize']].groupby(by='Collection', as_index=False).sum()
+            with (crawl_dir / "crawl_db.json").open("r") as f:
+                crawl_db = json.load(f)
 
-    existing_df['Size (GB)'] = (existing_df['FileSize'] / (1024 ** 3)).round(2)
-    new_df['Size (GB)'] = (new_df['FileSize'] / (1024 ** 3)).round(2)
+            updated_index = convert_to_db(index_df, crawl_db)
 
+            collection_index_dir = self.index_path / collection
+            collection_index_dir.mkdir(parents=True, exist_ok=True)
+            updated_index.to_csv(collection_index_dir / "index.csv", index=False)
+            csv_to_parquet(updated_index, collection_index_dir)
 
-    existing_df.to_csv(output_path / "updated_collections_table.csv")
-    new_df.to_csv(output_path / "new_collections_table.csv")
-
-    # Determine which collections are private and mark them accordingly
-
-    # Get all collections from IDC
-    response = requests.get("https://api.imaging.datacommons.cancer.gov/v2/collections")
-    idc_response = response.json()
-
-    # Extract collections list
-    idc_collections = [item['collection_id'].replace("_", "-").upper() for item in idc_response['collections']]
-    print(len(idc_collections))
-    data = {
-                        "file_type": "dicom",
-                        "source": "private_tcia",
-                        "post_download": [
-                            "unzip"
-                        ]
-                    }
-
-    print(idc_collections)
-    for _collection in tcia_collections:
-        if _collection["Collection"].upper().replace(" ", "-") not in idc_collections:
-            print(f"writing file to {output_path / _collection['Collection'] / 'source.json'}")
-            with open(output_path / _collection['Collection'] / 'source.json', 'w') as json_file:
-                json.dump(data, json_file, indent=4)
-    
-
-    
-
-
-
-
-
-
-
-# if __name__ == "__main__":
-#     client = NBIAClient()
-
-#     collections = client.getCollections()
-
-#     output_path = Path("indexed_datasets")
-#     output_path.mkdir(parents=True, exist_ok=True)
-
-#     for _collection in collections:
-#         collection = _collection["Collection"]
-
-#         if (output_path / ".imgtools" / collection / "index.csv").exists():
-#             logger.info(f"Skipping collection {collection} because it already exists")
-#             continue
-
-#         index_collection(client, collection, output_path, exist_strategy="overwrite", max_workers=int(client.max_concurrent_requests) - 3)
+        return update
 
 if __name__ == "__main__":
-    logger.setLevel(logging.DEBUG)
-    # TODO: Fix logging, add summary table as a csv (one for new colelctions one for existing), add private access.
-    is_dry = False
-    usage = "Usage: index_tcia.py <dd/mm/yyy> [OPTIONS]\nOptions:\n   --dry: executes a dry run which does not download any new data, but produces the summary tables for new and existing collection changes."
-    if len(sys.argv) > 3:
-        print(usage)
-        exit(0)
-    if len(sys.argv) == 3:
-        if sys.argv[2] == "--dry":
-            is_dry = True
-        else:
-            print(f"Unknown option {sys.argv[2]}")
-            print(usage)
-        
-    if len(sys.argv) == 1:
-        t1 = "01/09/1900"
-    else:
-        if sys.argv[1] == "--dry":
-            is_dry = True
-        else:
-            t1 = sys.argv[1] 
-    f1 = "%d/%m/%Y"
-
-    load_dotenv()
-
-    NBIA_USERNAME = os.getenv('NBIA_USERNAME')
-    NBIA_PASSWORD = os.getenv('NBIA_PASSWORD')
-    client = NBIAClient(username=NBIA_USERNAME, password=NBIA_PASSWORD, timeout_seconds=1000, max_concurrent_requests=32)
-    print("Client connection established.")
-    
-    
-    print("Retrieved collections list.")
-    output_path = Path("indexed_datasets")
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    
-    update_index(client=client, output_path=output_path, date=datetime.datetime.strptime(t1, f1).date().strftime("%d/%m/%Y"), is_dry=is_dry)
-
-    # FIX LOGGING STUFF
-    # MAKE .ENV
+    index = IndexTCIA(output_path="data/tcia/index")
+    index.run(since="01/07/2026")

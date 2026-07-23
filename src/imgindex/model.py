@@ -105,7 +105,7 @@ def get_index_schema(index_type: IndexType) -> Type[BaseSchema]:
 
 def validate_index(
     index_df: pd.DataFrame,
-    index_type: IndexType,
+    index_type: str,
     *,
     lazy: bool = False,
 ) -> Optional[pd.DataFrame]:

@@ -14,15 +14,11 @@ def generate_sample_id(ids):
     key = "|".join(sorted_ids)
     return hashlib.sha256(key.encode()).hexdigest()
 
-def convert_to_db(imgtools_path: Path) -> pd.DataFrame:
+def convert_to_db(
+    index_df: pd.DataFrame,
+    crawl_db: dict,
+) -> pd.DataFrame:
     """Convert imgtools output of a collection to a med-imagenet valid index.csv."""
-
-    index_path = imgtools_path / "index.csv"
-    index_df = pd.read_csv(index_path)
-    crawl_db_path = imgtools_path / "crawl_db.json"
-    with open(crawl_db_path, "r") as f:
-        crawl_db = json.load(f)
-
     interlacer = Interlacer(index_df)
 
     main_db = []
