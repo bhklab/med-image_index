@@ -191,7 +191,7 @@ class IndexTCIA:
 
     def _build_collection_summary(self, series: list[dict]) -> pd.DataFrame:
         """Aggregate series into per-collection count and size columns."""
-        columns = ["Collection", "SeriesCount", "FileSize", "Size (GB)"]
+        columns = ["Collection", "SeriesCount", "Size (GB)"]
         if not series:
             return pd.DataFrame(columns=columns)
 
@@ -205,7 +205,7 @@ class IndexTCIA:
             .sum()
         )
         summary["Size (GB)"] = (summary["FileSize"] / (1024**3)).round(2)
-        return summary
+        return summary[["Collection", "SeriesCount", "Size (GB)"]]
 
     def summarize_updates(self, since: str) -> TCIAUpdate:
         """Discover changes since `since`, write summary CSVs, and return a plan."""
@@ -334,24 +334,25 @@ class IndexTCIA:
 
         for collection in update.by_collection:
             crawl_dir = self.temp_path / collection
-            index_df = pd.read_csv(crawl_dir / "index.csv")
-            try:
-                validate_index(index_df, "dicom", lazy=True)
-            except Exception as e:
-                logger.error(f"Invalid index for collection {collection}: {e}")
-                continue
 
+            index_df = pd.read_csv(crawl_dir / "index.csv")
             with (crawl_dir / "crawl_db.json").open("r") as f:
                 crawl_db = json.load(f)
 
             updated_index = convert_to_db(index_df, crawl_db)
+            
+            try:
+                validate_index(updated_index, "dicom", lazy=True)
+            except Exception as e:
+                logger.error("Invalid index for collection %s: %s", collection, e)
+                continue
 
             collection_index_dir = self.index_path / collection
             collection_index_dir.mkdir(parents=True, exist_ok=True)
-            updated_index.to_csv(collection_index_dir / "index.csv", index=False)
             csv_to_parquet(updated_index, collection_index_dir)
 
         return update
+
 
 if __name__ == "__main__":
     index = IndexTCIA(output_path="data/tcia/index")
