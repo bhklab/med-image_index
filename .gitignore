@@ -28,3 +28,5 @@ indexed_datasets.tar.gz
 temp_data/
 parquet_index/
 new_index/
+
+data
