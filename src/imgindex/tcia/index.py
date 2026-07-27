@@ -340,12 +340,6 @@ class IndexTCIA:
                 crawl_db = json.load(f)
 
             updated_index = convert_to_db(index_df, crawl_db)
-            
-            try:
-                validate_index(updated_index, "dicom", lazy=True)
-            except Exception as e:
-                logger.error("Invalid index for collection %s: %s", collection, e)
-                continue
 
             collection_index_dir = self.index_path / collection
             collection_index_dir.mkdir(parents=True, exist_ok=True)

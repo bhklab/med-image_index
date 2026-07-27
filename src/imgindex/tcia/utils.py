@@ -2,17 +2,45 @@
 
 from pathlib import Path
 import hashlib
-import json
 import pandas as pd
 from imgtools.dicom import Interlacer
 
 from imgindex.model import validate_index
+
 
 def generate_sample_id(ids):
     """Generate a sample ID from a list of IDs."""
     sorted_ids = sorted(map(str, ids))
     key = "|".join(sorted_ids)
     return hashlib.sha256(key.encode()).hexdigest()
+
+
+def combine_index_df_and_crawl_db(index_df: pd.DataFrame, crawl_db: dict) -> pd.DataFrame:
+    combined_df = []
+    index_by_series = index_df.set_index("SeriesInstanceUID")
+
+    for series in index_df["SeriesInstanceUID"]:
+        if series not in crawl_db:
+            print(f"Series {series} not in crawl_db")
+            continue
+
+        entry = crawl_db[series]
+        record = entry[next(iter(entry))]
+
+        row = index_by_series.loc[series]
+        if isinstance(row, pd.DataFrame):  # duplicate SeriesInstanceUIDs
+            row = row.iloc[0]
+
+        extra_cols = {
+            col: row[col]
+            for col in index_df.columns
+            if col not in record
+        }
+
+        combined_df.append({**record, **extra_cols})
+
+    return pd.DataFrame(combined_df)
+    
 
 def convert_to_db(
     index_df: pd.DataFrame,
@@ -57,30 +85,40 @@ def convert_to_db(
     updated_index_df = pd.DataFrame(main_db)
     validated_df = validate_index(updated_index_df, "dicom", lazy=True)
     if validated_df is None:
-        raise ValueError(f"Invalid index for collection {imgtools_path.name}")
+        raise ValueError(f"Invalid index for collection, validation failed")
 
     if len(updated_index_df) != len(index_df):
-        raise ValueError(f"Invalid index for collection {imgtools_path.name}, {len(updated_index_df)} != {len(index_df)}")
+        raise ValueError(f"Invalid index for collection, number of samples mismatch: {len(updated_index_df)} != {len(index_df)}")
         
     return updated_index_df
 
+
 if __name__ == "__main__":
-    from imgnet.collections.store import IndexedDatasets
+    # from imgnet.collections.store import IndexedDatasets
 
-    new_index_path = Path("new_index")
-    new_index_path.mkdir(parents=True, exist_ok=True)
+    # new_index_path = Path("new_index")
+    # new_index_path.mkdir(parents=True, exist_ok=True)
 
-    indexed_datasets = IndexedDatasets()
-    for collection in indexed_datasets.collections:
-        if indexed_datasets.file_type(collection).value == "dicom":
-            print(f"Converting collection {collection}")
-            imgtools_path = indexed_datasets.imgtools_path / collection
-            main_db = convert_to_db(imgtools_path)
-            collection_path = new_index_path / collection
-            collection_path.mkdir(parents=True, exist_ok=True)
-            main_db.to_csv(collection_path / "index.csv", index=False)
-            print(f"Finished converting collection {collection}")
+    # indexed_datasets = IndexedDatasets()
+    # for collection in indexed_datasets.collections:
+    #     if indexed_datasets.file_type(collection).value == "dicom":
+    #         print(f"Converting collection {collection}")
+    #         imgtools_path = indexed_datasets.imgtools_path / collection
+    #         main_db = convert_to_db(imgtools_path)
+    #         collection_path = new_index_path / collection
+    #         collection_path.mkdir(parents=True, exist_ok=True)
+    #         main_db.to_csv(collection_path / "index.csv", index=False)
+    #         print(f"Finished converting collection {collection}")
+    import json
+    crawl_db = json.load(Path("data/tcia/index/temp/CMB-PCA/crawl_db.json").open("r"))
+    index_df = _convert_crawl_db_to_index_df(crawl_db)
+    print(index_df.columns)
 
+    other_index_df = pd.read_csv(Path("data/tcia/index/temp/CMB-PCA/index.csv"))
+    print(other_index_df.columns)
 
+    for column in other_index_df.columns:
+        if column not in index_df.columns:
+            print(f"Column {column} not in index_df")
 
             
