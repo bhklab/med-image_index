@@ -14,72 +14,64 @@ def generate_sample_id(ids):
     key = "|".join(sorted_ids)
     return hashlib.sha256(key.encode()).hexdigest()
 
-def convert_to_db(
-    index_df: pd.DataFrame,
+
+def convert_crawl_to_df(
     crawl_db: dict,
 ) -> pd.DataFrame:
     """Convert imgtools output of a collection to a med-imagenet valid index.csv."""
-    interlacer = Interlacer(index_df)
 
     main_db = []
-    samples = interlacer.query_all()
-    
-    found_series = set()
-    n_samples = 0
-    for sample in samples:
-        sample_id = generate_sample_id([series.SeriesInstanceUID for series in sample])
-        n_samples += 1
-        for series in sample:
-            if series.SeriesInstanceUID in found_series:
-                continue
-            found_series.add(series.SeriesInstanceUID)
-            entry = crawl_db[series.SeriesInstanceUID]
-            record = entry[next(iter(entry))]
-            main_db.append({
-                "SampleID": sample_id,
-                **record
-            })
-
-    # For modalities that are not considered by the crawler, add them manually
-    for series in index_df["SeriesInstanceUID"]:
-        if series in found_series:
-            continue
-        n_samples += 1
-        found_series.add(series)
-        entry = crawl_db[series]
-        record = entry[next(iter(entry))]
+    for series_uid, series_data in crawl_db.items():
+        record = series_data[next(iter(series_data))]
+        if 'ReferencedSeriesUID' not in record:
+            record['ReferencedSeriesUID'] = ''  # Add empty string as default
+        if 'ReferencedModality' not in record:
+                    record['ReferencedModality'] = ''  # Add empty string as default
+        if 'folder' not in record:
+                            record['folder'] = ''  # Add empty string as default
+        if 'SubSeries' not in record:
+                            record['SubSeries'] = 1  # Add empty string as default
+        if 'instances' in record:
+                                    record['instances'] = len(record['instances'].keys())
         main_db.append({
-            "SampleID": generate_sample_id([series]),
             **record
         })
+    return pd.DataFrame(main_db).fillna("")
 
-    print(f"Converted {n_samples} samples")
-    updated_index_df = pd.DataFrame(main_db)
-    validated_df = validate_index(updated_index_df, "dicom", lazy=True)
+def create_sample_ids_and_validate(updated_df: pd.DataFrame):
+
+    interlacer = Interlacer(updated_df)
+    updated_df['SampleID'] = pd.NA
+    samples = interlacer.query_all()
+    for sample in samples:
+        sample_series_uids = [series.SeriesInstanceUID for series in sample]
+        sample_id = generate_sample_id(sample_series_uids)
+        mask = updated_df['SeriesInstanceUID'].isin(sample_series_uids)
+        updated_df.loc[mask, 'SampleID'] = sample_id
+    mask = updated_df['SampleID'].isna()
+    updated_df.loc[mask, 'SampleID'] = updated_df.loc[mask, 'SeriesInstanceUID'].apply(lambda x: generate_sample_id([x]))
+    validated_df = validate_index(updated_df, "dicom", lazy=True)
     if validated_df is None:
-        raise ValueError(f"Invalid index for collection {imgtools_path.name}")
+        raise ValueError(f"Invalid index")
+    
+    return updated_df
 
-    if len(updated_index_df) != len(index_df):
-        raise ValueError(f"Invalid index for collection {imgtools_path.name}, {len(updated_index_df)} != {len(index_df)}")
-        
-    return updated_index_df
+# if __name__ == "__main__":
+#     from imgnet.collections.store import IndexedDatasets
 
-if __name__ == "__main__":
-    from imgnet.collections.store import IndexedDatasets
+#     new_index_path = Path("new_index")
+#     new_index_path.mkdir(parents=True, exist_ok=True)
 
-    new_index_path = Path("new_index")
-    new_index_path.mkdir(parents=True, exist_ok=True)
-
-    indexed_datasets = IndexedDatasets()
-    for collection in indexed_datasets.collections:
-        if indexed_datasets.file_type(collection).value == "dicom":
-            print(f"Converting collection {collection}")
-            imgtools_path = indexed_datasets.imgtools_path / collection
-            main_db = convert_to_db(imgtools_path)
-            collection_path = new_index_path / collection
-            collection_path.mkdir(parents=True, exist_ok=True)
-            main_db.to_csv(collection_path / "index.csv", index=False)
-            print(f"Finished converting collection {collection}")
+#     indexed_datasets = IndexedDatasets()
+#     for collection in indexed_datasets.collections:
+#         if indexed_datasets.file_type(collection).value == "dicom":
+#             print(f"Converting collection {collection}")
+#             imgtools_path = indexed_datasets.imgtools_path / collection
+#             main_db = convert_to_db(imgtools_path)
+#             collection_path = new_index_path / collection
+#             collection_path.mkdir(parents=True, exist_ok=True)
+#             main_db.to_csv(collection_path / "index.csv", index=False)
+#             print(f"Finished converting collection {collection}")
 
 
 

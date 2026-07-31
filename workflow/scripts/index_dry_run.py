@@ -1,5 +1,7 @@
 from imgindex.tcia.index import update_index
 from nbiatoolkit.nbia import NBIAClient
+
+
 from pathlib import Path
 import datetime
 
@@ -19,7 +21,7 @@ def main(
     update_index(
         output_path=output_path, 
         date=datetime.datetime.strptime(date, "%d/%m/%Y").date().strftime("%d/%m/%Y"), 
-        is_dry=True,
+        is_dry=False,
         client=client,
     )
 

@@ -1,25 +1,30 @@
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-import json
 from typing import Literal
 
 import pandas as pd
-from pydicom import dcmread
-from tabulate import tabulate
-from tqdm import tqdm
-
 from imgnet.collections.store import IndexedDatasets
 from imgtools.dicom.crawl import Crawler
-from nbiatoolkit import NBIA_ENDPOINT
-from nbiatoolkit.dicomtags.tags import generateFileDatasetFromTags
-from nbiatoolkit.nbia import NBIAClient
+from pydicom import dcmread
+from tabulate import tabulate
+from tcia_utils import idc, nbia
+from tqdm import tqdm
 
 from imgindex.model import DicomIndex, validate_index
-from imgindex.tcia.utils import convert_to_db
 from imgindex.parquet import csv_to_parquet
+from imgindex.tcia.tags import generateFileDatasetFromTags
+from imgindex.tcia.utils import convert_crawl_to_df, create_sample_ids_and_validate
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
+import threading
+from tqdm import tqdm
+import math
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,7 +42,6 @@ class TCIAUpdate:
 
 
 def process_single_series(
-    client: NBIAClient,
     series: dict,
     output_path: Path,
     collection: str,
@@ -50,35 +54,30 @@ def process_single_series(
 
     try:
         if series["Modality"] not in ["CT", "PT", "MR"]:
-            sop_uid_data = client.getSOPIDs(series)
-            sop_uid = next(
-                (entries[0]["SOPInstanceUID"] for entries in sop_uid_data.values() if entries),
-                None,
-            )
-            if sop_uid is None:
-                logger.warning("No SOP instances for series %s", series["SeriesInstanceUID"])
-                return False
+            # sop_uid_data = nbia.getSopInstanceUids(series['SeriesInstanceUID'])
+            # sop_uid = next(
+            #     (entries[0]["SOPInstanceUID"] for entries in sop_uid_data.values() if entries),
+            #     None,
+            # )
+            # if sop_uid is None:
+            #     logger.warning("No SOP instances for series %s", series["SeriesInstanceUID"])
+            #     return False
 
-            file = asyncio.run(
-                client.query_bytes(
-                    NBIA_ENDPOINT.DOWNLOAD_IMAGE,
-                    {
-                        "SeriesInstanceUID": series["SeriesInstanceUID"],
-                        "SOPInstanceUID": sop_uid,
-                    },
-                )
-            )
-            ds = dcmread(file, stop_before_pixels=True, force=True)
+            file = nbia.downloadSeries([series["SeriesInstanceUID"]], path=output_path / collection / "images", input_type='list')
+
+            #     client.query_bytes(
+            #         NBIA_ENDPOINT.DOWNLOAD_IMAGE,
+            #         {
+            #             "SeriesInstanceUID": series["SeriesInstanceUID"],
+            #             "SOPInstanceUID": sop_uid,
+            #         },
+            #     )
+            # )
+            #ds = dcmread(file, stop_before_pixels=True, force=True)
         else:
-            tags = asyncio.run(
-                client.query_json(
-                    NBIA_ENDPOINT.GET_DICOM_TAGS,
-                    {"SeriesUID": series["SeriesInstanceUID"]},
-                )
-            )
-            ds = generateFileDatasetFromTags(pd.DataFrame(tags))
-
-        ds.save_as(out_file, enforce_file_format=False)
+            tags = nbia.getDicomTags(series["SeriesInstanceUID"], format = "df")
+            ds = generateFileDatasetFromTags(tags)
+            ds.save_as(out_file, enforce_file_format=False)
         return True
     except Exception as e:
         logger.warning("Failed to process series %s: %s", series["SeriesInstanceUID"], e)
@@ -93,16 +92,9 @@ class IndexTCIA:
 
     def __init__(
         self,
-        output_path: Path | str,
-        *,
-        username: str | None = None,
-        password: str | None = None,
+        output_path: Path | str
     ) -> None:
         self.output_path = Path(output_path)
-        if username is None or password is None:
-            username = "nbia_guest"
-            password = ""
-        self.client = NBIAClient(username=username, password=password)
         self.store = IndexedDatasets(force_download=False)
 
     @property
@@ -122,16 +114,16 @@ class IndexTCIA:
 
     @property
     def tcia_collections(self) -> list[str]:
-        """All public collection names from TCIA/NBIA."""
-        return [c["Collection"] for c in self.client.getCollections()]
+        """All public collection names from TCIA/nbia."""
+        return [c["Collection"] for c in nbia.getCollections()]
 
     # ------------------------------------------------------------------
     # Step 1: summarize (no downloads / crawl)
     # ------------------------------------------------------------------
 
     def get_new_series_since(self, since: str) -> list[dict]:
-        """Return series updated since `since` (`dd/mm/yyyy`)."""
-        return self.client.getNewSeries(params={"fromDate": since})
+        """Return series updated since `since` (`yyyy/mm/dd`)."""
+        return nbia.getUpdatedSeries(since)
 
     def _group_by_collection(self, series_list: list[dict]) -> dict[str, list[dict]]:
         """Group series rows by Collection name."""
@@ -155,56 +147,21 @@ class IndexTCIA:
                 new.extend(series)
         return existing, new
 
-    def _get_series_sizes(self, series_uids: list[str], batch_size: int = 100) -> dict[str, int]:
-        """Map SeriesInstanceUID -> TotalSizeInBytes, skipping failed lookups."""
-        size_map: dict[str, int] = {uid: 0 for uid in series_uids}
-        if not series_uids:
-            return size_map
-
-        def fetch_sizes(uids: list[str]) -> None:
-            if not uids:
-                return
-            try:
-                rows = self.client.getSeriesSize(
-                    params=[{"SeriesInstanceUID": uid} for uid in uids]
-                )
-                # Responses are positional and omit SeriesInstanceUID.
-                for uid, row in zip(uids, rows):
-                    size_map[uid] = row.get("TotalSizeInBytes", 0)
-            except Exception:
-                if len(uids) == 1:
-                    logger.warning("Could not get size for series %s", uids[0])
-                    return
-                mid = len(uids) // 2
-                fetch_sizes(uids[:mid])
-                fetch_sizes(uids[mid:])
-
-        for start in range(0, len(series_uids), batch_size):
-            batch = series_uids[start : start + batch_size]
-            fetch_sizes(batch)
-            logger.info(
-                "Fetched sizes for %s/%s series",
-                min(start + batch_size, len(series_uids)),
-                len(series_uids),
-            )
-        return size_map
-
     def _build_collection_summary(self, series: list[dict]) -> pd.DataFrame:
         """Aggregate series into per-collection count and size columns."""
         columns = ["Collection", "SeriesCount", "Size (GB)"]
         if not series:
             return pd.DataFrame(columns=columns)
-
+    
         df = pd.DataFrame(series)
-        size_map = self._get_series_sizes(df["SeriesInstanceUID"].tolist())
         df["SeriesCount"] = 1
-        df["FileSize"] = df["SeriesInstanceUID"].map(size_map).fillna(0)
         summary = (
             df[["Collection", "SeriesCount", "FileSize"]]
             .groupby("Collection", as_index=False)
             .sum()
         )
-        summary["Size (GB)"] = (summary["FileSize"] / (1024**3)).round(2)
+
+        summary["Size (GB)"] = round(df["FileSize"]/ 1000 ** 3, 2)
         return summary[["Collection", "SeriesCount", "Size (GB)"]]
 
     def summarize_updates(self, since: str) -> TCIAUpdate:
@@ -263,38 +220,60 @@ class IndexTCIA:
             self.process_series(update.by_collection[collection], collection)
         self.crawl_collections(collections)
 
-    def process_series(self, series_list: list[dict], collection: str) -> None:
-        """Process all series in one collection, with a progress bar."""
+    def process_series(self, series_list: list[dict], collection: str, max_workers: int = 4) -> None:
+        """Process all series in one collection with multithreading and chunking."""
+        
         process_func = partial(
             process_single_series,
-            self.client,
             output_path=self.temp_path,
             exist_strategy="skip",
         )
-
-        with tqdm(
-            series_list,
-            desc=f"Processing {collection}",
-            unit="series",
-            total=len(series_list),
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
-        ) as pbar:
-            successful = 0
-            failed = 0
-            for series in pbar:
+        
+        # Thread-safe counters
+        successful = 0
+        failed = 0
+        lock = threading.Lock()
+        
+        # Split into chunks for better memory management
+        chunk_size = max(1, len(series_list) // max_workers)
+        chunks = [series_list[i:i + chunk_size] for i in range(0, len(series_list), chunk_size)]
+        
+        def process_chunk(chunk: list[dict]) -> tuple[int, int]:
+            """Process a chunk of series."""
+            local_success = 0
+            local_failed = 0
+            for series in chunk:
                 try:
                     if process_func(series, collection=series["Collection"]):
-                        successful += 1
+                        local_success += 1
                     else:
-                        failed += 1
+                        local_failed += 1
                 except Exception as e:
                     logger.error(
                         "Error processing series %s: %s",
                         series.get("SeriesInstanceUID"),
                         e,
                     )
-                    failed += 1
-                pbar.set_postfix({"Success": successful, "Failed": failed})
+                    local_failed += 1
+            return local_success, local_failed
+        
+        # Process chunks in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
+            
+            with tqdm(
+                total=len(series_list),
+                desc=f"Processing {collection}",
+                unit="series",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+            ) as pbar:
+                for future in as_completed(futures):
+                    chunk_success, chunk_failed = future.result()
+                    with lock:
+                        successful += chunk_success
+                        failed += chunk_failed
+                        pbar.update(chunk_success + chunk_failed)
+                        pbar.set_postfix({"Success": successful, "Failed": failed})
 
     def crawl_collections(self, collections: list[str]) -> None:
         """Run imgtools Crawler on collections that have downloaded images."""
@@ -333,20 +312,28 @@ class IndexTCIA:
             self.apply_updates(update)
 
         for collection in update.by_collection:
-            crawl_dir = self.temp_path / collection
 
-            index_df = pd.read_csv(crawl_dir / "index.csv")
+            
+            crawl_dir = self.temp_path / collection
             with (crawl_dir / "crawl_db.json").open("r") as f:
                 crawl_db = json.load(f)
 
-            updated_index = convert_to_db(index_df, crawl_db)
+            main_db = convert_crawl_to_df(crawl_db)
+            
+
+            
+            if collection in self.store.collections:
+                old_df = self.store.get_collection(collection).index
+                main_db = pd.concat([main_db, old_df], ignore_index=True)
+            updated_index = create_sample_ids_and_validate(updated_df=main_db)
             
             try:
                 validate_index(updated_index, "dicom", lazy=True)
             except Exception as e:
                 logger.error("Invalid index for collection %s: %s", collection, e)
                 continue
-
+            for col in updated_index.columns:
+                updated_index[col] = updated_index[col].astype(str)
             collection_index_dir = self.index_path / collection
             collection_index_dir.mkdir(parents=True, exist_ok=True)
             csv_to_parquet(updated_index, collection_index_dir)
@@ -355,5 +342,6 @@ class IndexTCIA:
 
 
 if __name__ == "__main__":
+    #nbia.downloadSeries(['1.2.826.0.1.534147.756.812677238.20221113689505.4'], path="tempdatalalala", input_type='list')
     index = IndexTCIA(output_path="data/tcia/index")
-    index.run(since="01/07/2026")
+    index.run(since="2026/06/01")
