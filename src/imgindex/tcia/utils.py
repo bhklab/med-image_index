@@ -2,11 +2,11 @@
 
 from pathlib import Path
 import hashlib
-import json
 import pandas as pd
 from imgtools.dicom import Interlacer
 
 from imgindex.model import validate_index
+
 
 def generate_sample_id(ids):
     """Generate a sample ID from a list of IDs."""
