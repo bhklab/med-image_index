@@ -88,7 +88,7 @@ class IndexTCIA:
     """Fetch TCIA series updates, summarize them, then optionally download and crawl."""
 
     TEMP_DIR_NAME = "temp"
-    INDEX_DIR_NAME = "index"
+    INDEX_DIR_NAME = "indexed_datasets"
 
     def __init__(
         self,
@@ -161,7 +161,7 @@ class IndexTCIA:
             .sum()
         )
 
-        summary["Size (GB)"] = round(df["FileSize"]/ 1000 ** 3, 2)
+        summary["Size (GB)"] = df["FileSize"]/ 1000 ** 3
         return summary[["Collection", "SeriesCount", "Size (GB)"]]
 
     def summarize_updates(self, since: str) -> TCIAUpdate:
@@ -220,7 +220,7 @@ class IndexTCIA:
             self.process_series(update.by_collection[collection], collection)
         self.crawl_collections(collections)
 
-    def process_series(self, series_list: list[dict], collection: str, max_workers: int = 4) -> None:
+    def process_series(self, series_list: list[dict], collection: str, max_workers: int = 32) -> None:
         """Process all series in one collection with multithreading and chunking."""
         
         process_func = partial(
@@ -325,15 +325,21 @@ class IndexTCIA:
             if collection in self.store.collections:
                 old_df = self.store.get_collection(collection).index
                 main_db = pd.concat([main_db, old_df], ignore_index=True)
+            main_db = main_db.drop_duplicates(subset=['SeriesInstanceUID'])
+            
             updated_index = create_sample_ids_and_validate(updated_df=main_db)
             
-            try:
-                validate_index(updated_index, "dicom", lazy=True)
-            except Exception as e:
-                logger.error("Invalid index for collection %s: %s", collection, e)
-                continue
-            for col in updated_index.columns:
-                updated_index[col] = updated_index[col].astype(str)
+
+            # for col in updated_index.columns:
+            #     updated_index[col] = updated_index[col].astype(str)
+            object_cols = updated_index.select_dtypes(include=["object"]).columns
+
+            updated_index[object_cols] = (
+                updated_index[object_cols]
+                .fillna("")
+                .astype(str)
+                .replace({"nan": "", "None": ""})
+            )
             collection_index_dir = self.index_path / collection
             collection_index_dir.mkdir(parents=True, exist_ok=True)
             csv_to_parquet(updated_index, collection_index_dir)
@@ -344,4 +350,4 @@ class IndexTCIA:
 if __name__ == "__main__":
     #nbia.downloadSeries(['1.2.826.0.1.534147.756.812677238.20221113689505.4'], path="tempdatalalala", input_type='list')
     index = IndexTCIA(output_path="data/tcia/index")
-    index.run(since="2026/06/01")
+    index.run(since="2025/09/01", apply=False)

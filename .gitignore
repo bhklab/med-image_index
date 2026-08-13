@@ -30,3 +30,5 @@ parquet_index/
 new_index/
 
 data
+
+temp.py

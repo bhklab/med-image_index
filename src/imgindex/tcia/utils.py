@@ -38,17 +38,32 @@ def convert_crawl_to_df(
         })
     return pd.DataFrame(main_db).fillna("")
 
+def propagate_sample_id(s):
+    ids = s[s != ""].unique()
+    if len(ids) > 1:
+        raise ValueError(f"Multiple SampleIDs found: {ids}")
+    return ids[0] if len(ids) else ""
+
 def create_sample_ids_and_validate(updated_df: pd.DataFrame):
 
     interlacer = Interlacer(updated_df)
-    updated_df['SampleID'] = pd.NA
+    if 'SampleID' not in updated_df.columns:
+        updated_df['SampleID'] = ""
+    else:
+        updated_df['SampleID'] = updated_df['SampleID'].fillna("")
     samples = interlacer.query_all()
+
     for sample in samples:
         sample_series_uids = [series.SeriesInstanceUID for series in sample]
-        sample_id = generate_sample_id(sample_series_uids)
-        mask = updated_df['SeriesInstanceUID'].isin(sample_series_uids)
-        updated_df.loc[mask, 'SampleID'] = sample_id
-    mask = updated_df['SampleID'].isna()
+
+        mask = updated_df["SeriesInstanceUID"].isin(sample_series_uids)
+
+        # SampleID is just a hash of the parent node. 
+        sample_id = generate_sample_id([sample_series_uids[0]])
+
+        updated_df.loc[mask, "SampleID"] = sample_id
+    
+    mask = updated_df["SampleID"] == ""
     updated_df.loc[mask, 'SampleID'] = updated_df.loc[mask, 'SeriesInstanceUID'].apply(lambda x: generate_sample_id([x]))
     validated_df = validate_index(updated_df, "dicom", lazy=True)
     if validated_df is None:

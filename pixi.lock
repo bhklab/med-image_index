@@ -183,7 +183,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d3/35/db860aa3a0780660324a506ad4b3d322ddc6ecbba4b9340aed0942cbf21c/hf_xet-1.5.2-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/58/e3/8db2dcac72ace5074f8296998f553107e25506cae5042405499de5adbb2a/highdicom-0.28.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/5f/c3/aeaaf3911d2529614be18d1c8b5496afc185560e76568063d517283318af/huggingface_hub-1.24.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/97/bb/63a644c75b545f3ff394b822e9bd1c4a9586489c618b77a4d8a44a33a23b/huggingface_hub-1.26.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e2/eb/2063237534d486c3537f238925562a30a4d698531435fae54eecbad35e5f/idc_index-0.11.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/46/23/839e3bc72764a3b626d26342d74951e366bc331bbeddf96338d27c50e363/idc_index_data-23.10.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3e/2d/ca050652104bab2cf55e569db2a178b1b61cb041fef28307f2db383f6d9f/imageio-2.37.4-py3-none-any.whl
@@ -413,7 +413,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/60/ac/b097a86a1e4a6098f3a79382643ab09d5733d87ccc864877ad1e12b49b70/hf_xet-1.5.2-cp38-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/58/e3/8db2dcac72ace5074f8296998f553107e25506cae5042405499de5adbb2a/highdicom-0.28.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/5f/c3/aeaaf3911d2529614be18d1c8b5496afc185560e76568063d517283318af/huggingface_hub-1.24.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/97/bb/63a644c75b545f3ff394b822e9bd1c4a9586489c618b77a4d8a44a33a23b/huggingface_hub-1.26.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e2/eb/2063237534d486c3537f238925562a30a4d698531435fae54eecbad35e5f/idc_index-0.11.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/46/23/839e3bc72764a3b626d26342d74951e366bc331bbeddf96338d27c50e363/idc_index_data-23.10.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3e/2d/ca050652104bab2cf55e569db2a178b1b61cb041fef28307f2db383f6d9f/imageio-2.37.4-py3-none-any.whl
@@ -1489,10 +1489,10 @@ packages:
   - pkg:pypi/httpx?source=hash-mapping
   size: 63082
   timestamp: 1733663449209
-- pypi: https://files.pythonhosted.org/packages/5f/c3/aeaaf3911d2529614be18d1c8b5496afc185560e76568063d517283318af/huggingface_hub-1.24.0-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/97/bb/63a644c75b545f3ff394b822e9bd1c4a9586489c618b77a4d8a44a33a23b/huggingface_hub-1.26.0-py3-none-any.whl
   name: huggingface-hub
-  version: 1.24.0
-  sha256: 6ed4120a84a6beec900640aa7e346bd766a6b7341e41526fef5dc8bd81fb7d59
+  version: 1.26.0
+  sha256: e8cca670caa5d8dfa7e45bf45e86b466698198cd8150c021bcdb4a86b9252364
   requires_dist:
   - click>=8.4.2,<9.0.0
   - filelock>=3.10.0
@@ -1526,7 +1526,7 @@ packages:
   - pytest-xdist ; extra == 'testing'
   - pytest-vcr ; extra == 'testing'
   - pytest-asyncio ; extra == 'testing'
-  - pytest-rerunfailures<16.0 ; extra == 'testing'
+  - pytest-rerunfailures>=16.2 ; extra == 'testing'
   - pytest-mock ; extra == 'testing'
   - urllib3<2.0 ; extra == 'testing'
   - soundfile ; extra == 'testing'
@@ -1558,7 +1558,7 @@ packages:
   - pytest-xdist ; extra == 'all'
   - pytest-vcr ; extra == 'all'
   - pytest-asyncio ; extra == 'all'
-  - pytest-rerunfailures<16.0 ; extra == 'all'
+  - pytest-rerunfailures>=16.2 ; extra == 'all'
   - pytest-mock ; extra == 'all'
   - urllib3<2.0 ; extra == 'all'
   - soundfile ; extra == 'all'
@@ -1588,7 +1588,7 @@ packages:
   - pytest-xdist ; extra == 'dev'
   - pytest-vcr ; extra == 'dev'
   - pytest-asyncio ; extra == 'dev'
-  - pytest-rerunfailures<16.0 ; extra == 'dev'
+  - pytest-rerunfailures>=16.2 ; extra == 'dev'
   - pytest-mock ; extra == 'dev'
   - urllib3<2.0 ; extra == 'dev'
   - soundfile ; extra == 'dev'
