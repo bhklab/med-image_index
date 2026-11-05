@@ -19,4 +19,4 @@ packages = ["src/imgindex"]
 
 [tool.uv.sources]
 med-imagetools = { git = "https://github.com/bhklab/med-imagetools.git", rev = "JoshuaSiraj/nifti-index" }
-med-imagenet = { git = "https://github.com/bhklab/med-imagenet.git" }
+med-imagenet = { git = "https://github.com/bhklab/med-imagenet.git", rev = "DeclanKorda/add-more-sources"}
