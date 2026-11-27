@@ -24,21 +24,6 @@ PARTITION_FILENAME_TEMPLATE = "part-{i}.parquet"
 _UNSAFE_FILESYSTEM_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
-def load_index_csv(csv_path: Path | str) -> pd.DataFrame:
-    """Load an index CSV into a DataFrame.
-
-    Args:
-        csv_path: Path to an index CSV (e.g. ``index.csv`` for one collection).
-
-    Returns:
-        Raw index data loaded from ``csv_path``.
-
-    Notes:
-        Assumes the CSV uses a header row and is readable by ``pandas.read_csv``.
-    """
-    return pd.read_csv(csv_path)
-
-
 def sanitize_modality_for_partitioning(modality_values: pd.Series) -> pd.Series:
     """Sanitize Modality values for hive-style partition directory names.
 
@@ -134,7 +119,7 @@ def write_modality_partitioned_parquet(
 
 
 def csv_to_parquet(
-    csv_path: Path | str,
+    index_df: pd.DataFrame,
     output_dir: Path | str,
     *,
     compression: str = DEFAULT_COMPRESSION,
@@ -142,7 +127,7 @@ def csv_to_parquet(
     """Read an index CSV and write a Modality-partitioned Parquet dataset.
 
     Args:
-        csv_path: Path to an index CSV (e.g. ``index.csv`` for one collection).
+        index_df: Index DataFrame to write to Parquet.
         output_dir: Root directory for the Parquet dataset (created if missing).
         compression: Parquet codec passed to PyArrow.
 
@@ -150,10 +135,10 @@ def csv_to_parquet(
         ``output_dir`` after writing the dataset.
 
     Raises:
-        ValueError: If ``Modality`` is not present in the CSV.
+        ValueError: If ``Modality`` is not present in the index DataFrame.
 
     Notes:
-        Assumes each CSV row represents one indexed sample and that ``Modality``
+        Assumes each index DataFrame row represents one indexed sample and that ``Modality``
         is the desired hive partition key.
 
     Example:
@@ -162,13 +147,10 @@ def csv_to_parquet(
             output_dir/Modality=CT/part-0.parquet
             output_dir/Modality=MR/part-0.parquet
     """
-    csv_file_path = Path(csv_path)
-    index_df = load_index_csv(csv_file_path)
-
     try:
         prepared_index_df = prepare_index_for_parquet(index_df)
     except ValueError as error:
-        raise ValueError(f"{csv_file_path}: {error}") from error
+        raise ValueError(f"Invalid index for parquet: {error}") from error
 
     return write_modality_partitioned_parquet(
         prepared_index_df,
